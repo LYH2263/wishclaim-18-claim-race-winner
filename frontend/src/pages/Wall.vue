@@ -6,7 +6,8 @@
       <article v-for="w in rows" :key="w.id" class="card" @click="$router.push('/wishes/'+w.id)">
         <h3>{{ w.title || '（无标题）' }}</h3>
         <p>{{ w.note }}</p>
-        <span class="tag">{{ w.status }} · {{ w.data_quality }}</span>
+        <PinBadge :pin="w.pin" />
+        <span class="tag"> · {{ w.data_quality }}</span>
       </article>
     </div>
   </div>
@@ -14,6 +15,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { api } from '../api'
+import PinBadge from '../components/PinBadge.vue'
 const rows = ref([])
 onMounted(async () => { rows.value = await api('/wishes') })
 </script>

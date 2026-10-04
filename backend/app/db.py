@@ -7,6 +7,9 @@ def db_path() -> Path:
     return d / "wishclaim.db"
 
 def connect():
-    c = sqlite3.connect(db_path())
+    # isolation_level=None → autocommit; the claim critical section opens its
+    # own BEGIN IMMEDIATE. timeout lets a concurrent claimer wait for the
+    # winner's write lock instead of failing with "database is locked".
+    c = sqlite3.connect(db_path(), isolation_level=None, timeout=10)
     c.row_factory = sqlite3.Row
     return c

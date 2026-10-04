@@ -2,6 +2,7 @@
   <div class="wall">
     <h1 class="serif">{{ w.title }}</h1>
     <p>{{ w.note }}</p>
+    <p><PinBadge :pin="w.pin" /></p>
     <p class="tag">状态 {{ w.status }} · 认领人 {{ w.claimer || '—' }}</p>
     <p v-if="err" class="err">{{ err }}</p>
     <input v-model="claimer" placeholder="你的名字" />
@@ -15,6 +16,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { api } from '../api'
+import PinBadge from '../components/PinBadge.vue'
 const props = defineProps({ id: String })
 const w = ref({})
 const claimer = ref('访客')

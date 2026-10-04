@@ -4,7 +4,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from app import seed
 from app.db import connect
-from app.engines.claim_lock import claim_allowed, lock_payload, release_if_expired
+from app.engines.claim_lock import claim_critical_section, release_if_expired
+from app.modules import claim_pin
 
 app = FastAPI(title="Wishclaim", version="0.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -30,15 +31,16 @@ def health(): return {"ok": True, "project": "wishclaim"}
 
 @app.get("/api/wishes")
 def list_wishes():
-    c = connect(); sweep(c); c.commit()
-    rows = [dict(r) for r in c.execute("SELECT * FROM wishes ORDER BY id DESC")]; c.close(); return rows
+    c = connect(); sweep(c)
+    rows = claim_pin.attach_all(c.execute("SELECT * FROM wishes ORDER BY id DESC").fetchall())
+    c.close(); return rows
 
 @app.get("/api/wishes/{wid}")
 def get_wish(wid: int):
-    c = connect(); sweep(c); c.commit()
+    c = connect(); sweep(c)
     r = c.execute("SELECT * FROM wishes WHERE id=?", (wid,)).fetchone(); c.close()
     if not r: raise HTTPException(404, "not found")
-    return dict(r)
+    return claim_pin.attach(r)
 
 class WishIn(BaseModel):
     title: str
@@ -49,23 +51,23 @@ def create_wish(body: WishIn):
     c = connect()
     cur = c.execute("INSERT INTO wishes(title,note,status,data_quality) VALUES (?,?,?,?)",
                     (body.title, body.note, "open", "clean"))
-    c.commit(); wid = cur.lastrowid; c.close(); return {"id": wid}
+    wid = cur.lastrowid; c.close(); return {"id": wid}
 
 class ClaimIn(BaseModel):
     claimer: str
 
 @app.post("/api/wishes/{wid}/claim")
 def claim(wid: int, body: ClaimIn):
-    c = connect(); sweep(c); c.commit()
-    r = c.execute("SELECT * FROM wishes WHERE id=?", (wid,)).fetchone()
-    if not r: c.close(); raise HTTPException(404, "not found")
-    allowed = claim_allowed(r["status"], r["claimer"], now(), r["expires_at"])
-    if not allowed["ok"]:
-        c.close(); raise HTTPException(409, allowed["reason"])
-    p = lock_payload(body.claimer, now(), ttl())
-    c.execute("UPDATE wishes SET status=?, claimer=?, claimed_at=?, expires_at=? WHERE id=?",
-              (p["status"], p["claimer"], p["claimed_at"], p["expires_at"], wid))
-    c.commit(); c.close(); return p
+    c = connect()
+    try:
+        res = claim_critical_section(c, wid, body.claimer, now(), ttl())
+        if not res["ok"]:
+            # Stable loser codes: 404 not_found, else 409 with the gate's code.
+            raise HTTPException(404 if res["code"] == "not_found" else 409, res["code"])
+        r = c.execute("SELECT * FROM wishes WHERE id=?", (wid,)).fetchone()
+        return claim_pin.attach(r)
+    finally:
+        c.close()
 
 @app.post("/api/wishes/{wid}/release")
 def release(wid: int):
@@ -75,7 +77,7 @@ def release(wid: int):
     if r["status"] != "claimed":
         c.close(); raise HTTPException(400, "not_claimed")
     c.execute("UPDATE wishes SET status='released', claimer=NULL, claimed_at=NULL, expires_at=NULL WHERE id=?", (wid,))
-    c.commit(); c.close(); return {"ok": True, "status": "released"}
+    c.close(); return {"ok": True, "status": "released"}
 
 @app.post("/api/wishes/{wid}/fulfill")
 def fulfill(wid: int):
@@ -85,17 +87,19 @@ def fulfill(wid: int):
     if r["status"] != "claimed":
         c.close(); raise HTTPException(400, "need_claim")
     c.execute("UPDATE wishes SET status='fulfilled' WHERE id=?", (wid,))
-    c.commit(); c.close(); return {"ok": True, "status": "fulfilled"}
+    c.close(); return {"ok": True, "status": "fulfilled"}
 
 @app.get("/api/mine")
 def mine(claimer: str):
-    c = connect(); sweep(c); c.commit()
-    rows = [dict(r) for r in c.execute("SELECT * FROM wishes WHERE claimer=?", (claimer,))]; c.close(); return rows
+    c = connect(); sweep(c)
+    rows = claim_pin.attach_all(c.execute("SELECT * FROM wishes WHERE claimer=?", (claimer,)).fetchall())
+    c.close(); return rows
 
 @app.get("/api/done")
 def done():
     c = connect()
-    rows = [dict(r) for r in c.execute("SELECT * FROM wishes WHERE status='fulfilled'")]; c.close(); return rows
+    rows = claim_pin.attach_all(c.execute("SELECT * FROM wishes WHERE status='fulfilled'").fetchall())
+    c.close(); return rows
 
 @app.get("/api/settings")
 def settings():
@@ -105,6 +109,7 @@ def settings():
 def rules():
     return {
         "mutex": "同一愿望同时只能被一人认领",
+        "race": "并发认领同一愿望恰好一人胜出，败者得到稳定错误码 locked，锁不被改动",
         "ttl": "认领超时未核销则自动释放",
         "fulfill": "核销后状态变为 fulfilled",
     }

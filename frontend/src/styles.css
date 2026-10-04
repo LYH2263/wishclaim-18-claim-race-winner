@@ -35,3 +35,9 @@ button.ghost { background: transparent; color: var(--ink); border: 1px solid var
 input, textarea { width: 100%; padding: 10px; border-radius: 12px; border: 1px solid var(--line); font: inherit; margin: 6px 0 12px; background: #fff; }
 .menu-btn { position: fixed; left: 16px; top: 16px; z-index: 10; }
 .err { color: #a33; }
+.pin {
+  display: inline-block; font-size: 12px; padding: 2px 10px; border-radius: 999px;
+  background: #efe2da; color: var(--muted); border: 1px solid var(--line);
+}
+.pin[data-state="claimed"] { background: var(--rose); color: #fff; border-color: var(--rose); }
+.pin[data-state="fulfilled"] { background: #7f9c80; color: #fff; border-color: #7f9c80; }
